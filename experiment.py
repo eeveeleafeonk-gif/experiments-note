@@ -42,6 +42,25 @@ def df_to_markdown_safe(df, cols):
         md += "| " + " | ".join([str(x) for x in row.tolist()]) + " |\n"
     return md
 
+# 💡 データの消失を防ぐための最新手入力回収用関数
+def get_current_df(df_key, editor_key):
+    df = st.session_state[df_key].copy()
+    if editor_key in st.session_state:
+        ed = st.session_state[editor_key]
+        # セル編集の反映
+        for idx, changes in ed.get("edited_rows", {}).items():
+            for col, val in changes.items():
+                df.at[int(idx), col] = val
+        # 行追加の反映
+        added = ed.get("added_rows", [])
+        if added:
+            df = pd.concat([df, pd.DataFrame(added)], ignore_index=True)
+        # 行削除の反映
+        deleted = ed.get("deleted_rows", [])
+        if deleted:
+            df = df.drop(deleted).reset_index(drop=True)
+    return df
+
 # --- GSheets接続ヘルパー ---
 def get_gsheets_client():
     creds_dict = dict(st.secrets["connections"]["gsheets"])
@@ -133,12 +152,16 @@ if "active_search" in st.session_state:
     def add_btn_ui(res_dict, key_prefix):
         c1, c2 = st.columns(2)
         if c1.button("➕ 固体・純液体 に追加", key=f"{key_prefix}_solid", use_container_width=True):
+            # 💡 追加する前に現在のエディタの最新手入力を回収してマージする
+            current_df = get_current_df("df_rsolid", "ed_rsolid")
             r = {"分類": "試薬(固体/液体)", "主原料": False, "試薬名": res_dict["試薬名"], "分子量": res_dict["分子量"], "密度(g/mL)": res_dict["密度(g/mL)"], "融点(℃)": res_dict["融点(℃)"], "沸点(℃)": res_dict["沸点(℃)"]}
-            st.session_state.df_rsolid = pd.concat([st.session_state.df_rsolid, pd.DataFrame([r])], ignore_index=True)
+            st.session_state.df_rsolid = pd.concat([current_df, pd.DataFrame([r])], ignore_index=True)
             st.rerun()
         if c2.button("➕ 溶液試薬 に追加", key=f"{key_prefix}_liq", use_container_width=True):
-            r = {"分類": "試薬(溶液)", "主原料": False, "試薬名": res_dict["試薬名"]}
-            st.session_state.df_rliquid = pd.concat([st.session_state.df_rliquid, pd.DataFrame([r])], ignore_index=True)
+            # 💡 追加する前に現在のエディタの最新手入力を回収してマージする
+            current_df = get_current_df("df_rliquid", "ed_rliquid")
+            r = {"分類": "試薬(溶液)", "主原料": False, "試薬名": res_dict["試薬名"], "設定濃度(M)": None, "当量(Eq)": None, "体積(mL)": None, "モル数(mmol)": None}
+            st.session_state.df_rliquid = pd.concat([current_df, pd.DataFrame([r])], ignore_index=True)
             st.rerun()
 
     with c_db:
@@ -211,10 +234,8 @@ for src_df, cat_name in frames:
 if migrated: st.rerun()
 
 st.markdown("---")
-# ボタンを3つ並べるためにレイアウトを調整
 c_calc, c_clear_val, c_clr, _ = st.columns([1.5, 1.5, 1.2, 2.8])
 
-# 1. すべてクリアボタン（既存）
 if c_clr.button("🔄 すべてクリア", use_container_width=True):
     st.session_state.df_rsolid = st.session_state.df_rsolid.iloc[0:0]
     st.session_state.df_rliquid = st.session_state.df_rliquid.iloc[0:0]
@@ -222,24 +243,18 @@ if c_clr.button("🔄 すべてクリア", use_container_width=True):
     st.session_state.df_products = st.session_state.df_products.iloc[0:0]
     st.rerun()
 
-# 2. 新規：計算値のみクリアボタン（スケール変更用）
 if c_clear_val.button("🧹 計算値のみクリア", use_container_width=True):
-    # 固体・純液体
     for col in ["当量(Eq)", "重量(mg)", "体積(mL)", "モル数(mmol)"]:
         if col in st.session_state.df_rsolid.columns: st.session_state.df_rsolid[col] = None
-    # 溶液
     for col in ["当量(Eq)", "体積(mL)", "モル数(mmol)"]:
         if col in st.session_state.df_rliquid.columns: st.session_state.df_rliquid[col] = None
-    # 溶媒
     for col in ["設定濃度(M)", "溶媒倍率(v/w)", "体積(mL)"]:
         if col in st.session_state.df_solvents.columns: st.session_state.df_solvents[col] = None
-    # 生成物
     for col in ["当量(Eq)", "理論収量(mg)", "実収量(mg)", "収率(%)"]:
         if col in st.session_state.df_products.columns: st.session_state.df_products[col] = None
     st.rerun()
 
 # --- 計算ロジック ---
-# 3. 計算実行ボタン
 if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary", use_container_width=True):
     d_rs, d_rl, d_sv, d_pr = ed_rsolid.copy(), ed_rliquid.copy(), ed_solv.copy(), ed_prod.copy()
     b_solid_mask = d_rs["主原料"].fillna(False).astype(bool)
@@ -249,7 +264,6 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
     if not b_solid_mask.any() and not b_liq_mask.any() and (len(d_rs)>0 or len(d_rl)>0):
         st.error("⚠️ 『主原料』にチェックを入れてください。")
     else:
-        # 主原料のモル数特定
         if b_solid_mask.any():
             idx = d_rs[b_solid_mask].index[0]
             mw, d, w, v, m_in = to_float(d_rs.loc[idx,"分子量"]), to_float(d_rs.loc[idx,"密度(g/mL)"]), to_float(d_rs.loc[idx,"重量(mg)"]), to_float(d_rs.loc[idx,"体積(mL)"]), to_float(d_rs.loc[idx,"モル数(mmol)"])
@@ -268,7 +282,6 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
                 d_rl.at[idx,"当量(Eq)"], d_rl.at[idx,"モル数(mmol)"] = "1.00", format_val(b_mmol, "{:.3f}")
                 if c: d_rl.at[idx,"体積(mL)"] = format_val(b_mmol/c, "{:.3f}")
 
-        # 他の試薬・生成物の計算
         if b_mmol:
             for i, r in d_rs.iterrows():
                 if b_solid_mask.any() and i == d_rs[b_solid_mask].index[0]: continue
