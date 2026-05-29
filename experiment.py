@@ -240,7 +240,7 @@ if c_clear_val.button("🧹 計算値のみクリア", use_container_width=True)
 
 # --- 計算ロジック ---
 # 3. 計算実行ボタン
-if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary", use_container_width=True)
+if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary", use_container_width=True):
     d_rs, d_rl, d_sv, d_pr = ed_rsolid.copy(), ed_rliquid.copy(), ed_solv.copy(), ed_prod.copy()
     b_solid_mask = d_rs["主原料"].fillna(False).astype(bool)
     b_liq_mask = d_rl["主原料"].fillna(False).astype(bool)
