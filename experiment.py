@@ -118,21 +118,65 @@ with col_btn:
 
 if search_clicked and search_name:
     with st.spinner("PubChemからデータと構造式を取り出しています..."):
-        url_prop = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{search_name}/property/MolecularWeight,CanonicalSMILES,Title/JSON"
-        res_prop = requests.get(url_prop)
+        # 1. まずは fastidentity（略称や同義語に強い検索）で CID を探す
+        cid_search_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/fastidentity/name/{search_name}/cids/JSON"
+        res_cid = requests.get(cid_search_url)
         
-        if res_prop.status_code == 200:
-            prop_data = res_prop.json()["PropertyTable"]["Properties"][0]
-            cid_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{search_name}/cids/JSON"
-            res_cid = requests.get(cid_url)
+        # 2. 見つからなければ通常の name 検索を試す
+        if res_cid.status_code != 200:
+             cid_search_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{search_name}/cids/JSON"
+             res_cid = requests.get(cid_search_url)
+
+        if res_cid.status_code == 200:
+            # 見つかったCID（化合物ID）を取得
+            cid = res_cid.json()["IdentifierList"]["CID"][0]
             
-            mw = prop_data.get("MolecularWeight", None)
-            title = prop_data.get("Title", search_name)
-            props = {"density": None, "mp": None, "bp": None, "cid": None}
+            # CIDを使って分子量や名前を取得
+            url_prop = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/MolecularWeight,CanonicalSMILES,Title/JSON"
+            res_prop = requests.get(url_prop)
             
-            if res_cid.status_code == 200:
-                cid = res_cid.json()["IdentifierList"]["CID"][0]
-                props["cid"] = cid
+            mw = None
+            title = search_name
+            if res_prop.status_code == 200:
+                prop_data = res_prop.json()["PropertyTable"]["Properties"][0]
+                mw = prop_data.get("MolecularWeight", None)
+                title = prop_data.get("Title", search_name) # 正式名称を取得
+            
+            props = {"density": None, "mp": None, "bp": None, "cid": cid}
+            
+            # CIDを使って融点・沸点・密度を取得
+            url_view = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON"
+            res_view = requests.get(url_view)
+            if res_view.status_code == 200:
+                view_data = res_view.json()
+                
+                def parse_section(sections):
+                    for sec in sections:
+                        heading = sec.get("TOCHeading", "")
+                        if heading == "Melting Point":
+                            try: props["mp"] = extract_temp(sec["Information"][0]["Value"]["StringWithMarkup"][0]["String"])
+                            except: pass
+                        elif heading == "Boiling Point":
+                            try: props["bp"] = extract_temp(sec["Information"][0]["Value"]["StringWithMarkup"][0]["String"])
+                            except: pass
+                        elif heading == "Density":
+                            try: props["density"] = extract_density(sec["Information"][0]["Value"]["StringWithMarkup"][0]["String"])
+                            except: pass
+                        if "Section" in sec: parse_section(sec["Section"])
+                
+                if "Record" in view_data and "Section" in view_data["Record"]:
+                    parse_section(view_data["Record"]["Section"])
+            
+            st.session_state.search_result = {
+                "分類": "試薬", "主原料": False, "試薬名": title,
+                "分子量": float(mw) if mw else None, "密度(g/mL)": props["density"], "融点(℃)": props["mp"], "沸点(℃)": props["bp"],
+                "当量(Eq)": None, "重量(mg)": None, "体積(mL)": None, "モル数(mmol)": None
+            }
+            st.session_state.search_cid = props["cid"]
+        else:
+            st.error("PubChemに該当する化合物が見つかりませんでした。英語名や略称を確認してください。")
+            if "search_result" in st.session_state: del st.session_state.search_result
+            if "search_cid" in st.session_state: del st.session_state.search_cid
                 url_view = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON"
                 res_view = requests.get(url_view)
                 if res_view.status_code == 200:
