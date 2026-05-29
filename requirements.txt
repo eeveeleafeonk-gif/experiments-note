@@ -2,4 +2,5 @@ streamlit
 pandas
 requests
 numpy
-st-gsheets-connection
+gspread
+oauth2client
