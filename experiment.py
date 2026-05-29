@@ -42,20 +42,17 @@ def df_to_markdown_safe(df, cols):
         md += "| " + " | ".join([str(x) for x in row.tolist()]) + " |\n"
     return md
 
-# 💡 データの消失を防ぐための最新手入力回収用関数
+# 最新手入力回収用関数
 def get_current_df(df_key, editor_key):
     df = st.session_state[df_key].copy()
     if editor_key in st.session_state:
         ed = st.session_state[editor_key]
-        # セル編集の反映
         for idx, changes in ed.get("edited_rows", {}).items():
             for col, val in changes.items():
                 df.at[int(idx), col] = val
-        # 行追加の反映
         added = ed.get("added_rows", [])
         if added:
             df = pd.concat([df, pd.DataFrame(added)], ignore_index=True)
-        # 行削除の反映
         deleted = ed.get("deleted_rows", [])
         if deleted:
             df = df.drop(deleted).reset_index(drop=True)
@@ -72,7 +69,7 @@ def get_gsheets_client():
 
 # --- 1. セッション状態の初期化 ---
 if 'df_rsolid' not in st.session_state:
-    st.session_state.df_rsolid = pd.DataFrame(columns=["分類", "主原料", "試薬名", "分子量", "密度(g/mL)", "融点(℃)", "沸点(℃)", "当量(Eq)", "重量(mg)", "体積(mL)", "モル数(mmol)"])
+    st.session_state.df_rsolid = pd.DataFrame(columns=["分類", "主原料", "試薬名", "純度(%)", "分子量", "密度(g/mL)", "融点(℃)", "沸点(℃)", "当量(Eq)", "重量(mg)", "体積(mL)", "モル数(mmol)"])
 if 'df_rliquid' not in st.session_state:
     st.session_state.df_rliquid = pd.DataFrame(columns=["分類", "主原料", "試薬名", "設定濃度(M)", "当量(Eq)", "体積(mL)", "モル数(mmol)"])
 if 'df_solvents' not in st.session_state:
@@ -152,13 +149,11 @@ if "active_search" in st.session_state:
     def add_btn_ui(res_dict, key_prefix):
         c1, c2 = st.columns(2)
         if c1.button("➕ 固体・純液体 に追加", key=f"{key_prefix}_solid", use_container_width=True):
-            # 💡 追加する前に現在のエディタの最新手入力を回収してマージする
             current_df = get_current_df("df_rsolid", "ed_rsolid")
-            r = {"分類": "試薬(固体/液体)", "主原料": False, "試薬名": res_dict["試薬名"], "分子量": res_dict["分子量"], "密度(g/mL)": res_dict["密度(g/mL)"], "融点(℃)": res_dict["融点(℃)"], "沸点(℃)": res_dict["沸点(℃)"]}
+            r = {"分類": "試薬(固体/液体)", "主原料": False, "試薬名": res_dict["試薬名"], "純度(%)": None, "分子量": res_dict["分子量"], "密度(g/mL)": res_dict["密度(g/mL)"], "融点(℃)": res_dict["融点(℃)"], "沸点(℃)": res_dict["沸点(℃)"]}
             st.session_state.df_rsolid = pd.concat([current_df, pd.DataFrame([r])], ignore_index=True)
             st.rerun()
         if c2.button("➕ 溶液試薬 に追加", key=f"{key_prefix}_liq", use_container_width=True):
-            # 💡 追加する前に現在のエディタの最新手入力を回収してマージする
             current_df = get_current_df("df_rliquid", "ed_rliquid")
             r = {"分類": "試薬(溶液)", "主原料": False, "試薬名": res_dict["試薬名"], "設定濃度(M)": None, "当量(Eq)": None, "体積(mL)": None, "モル数(mmol)": None}
             st.session_state.df_rliquid = pd.concat([current_df, pd.DataFrame([r])], ignore_index=True)
@@ -192,6 +187,7 @@ st.subheader("🪨 試薬 (固体・純液体)")
 ed_rsolid = st.data_editor(st.session_state.df_rsolid, column_config={
     "分類": st.column_config.SelectboxColumn("移籍", options=cat_options, required=True), 
     "主原料": st.column_config.CheckboxColumn("主原料"),
+    "純度(%)": st.column_config.NumberColumn("純度(%)", format="%.1f"), 
     "分子量": st.column_config.NumberColumn("分子量", format="%.2f"), 
     "密度(g/mL)": st.column_config.NumberColumn("密度(g/mL)", format="%.2f")
 }, num_rows="dynamic", use_container_width=True, key="ed_rsolid")
@@ -264,16 +260,23 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
     if not b_solid_mask.any() and not b_liq_mask.any() and (len(d_rs)>0 or len(d_rl)>0):
         st.error("⚠️ 『主原料』にチェックを入れてください。")
     else:
+        # 主原料の計算
         if b_solid_mask.any():
             idx = d_rs[b_solid_mask].index[0]
             mw, d, w, v, m_in = to_float(d_rs.loc[idx,"分子量"]), to_float(d_rs.loc[idx,"密度(g/mL)"]), to_float(d_rs.loc[idx,"重量(mg)"]), to_float(d_rs.loc[idx,"体積(mL)"]), to_float(d_rs.loc[idx,"モル数(mmol)"])
-            b_mmol = m_in if m_in else (w/mw if w and mw else (v*d*1000/mw if v and d and mw else None))
+            p_raw = to_float(d_rs.loc[idx,"純度(%)"])
+            p_fac = p_raw / 100.0 if p_raw and p_raw > 0 else 1.0 # 純度補正
+            
+            b_mmol = m_in if m_in else (w*p_fac/mw if w and mw else (v*d*1000*p_fac/mw if v and d and mw else None))
+            
             if b_mmol:
                 d_rs.at[idx,"当量(Eq)"], d_rs.at[idx,"モル数(mmol)"] = "1.00", format_val(b_mmol, "{:.3f}")
                 calc_w = b_mmol*mw if mw else "計算不能"
-                d_rs.at[idx,"重量(mg)"] = format_val(calc_w, "{:.1f}")
-                b_w_g = calc_w/1000.0 if calc_w != "計算不能" else None
-                d_rs.at[idx,"体積(mL)"] = format_val(calc_w/(d*1000), "{:.3f}") if calc_w!="計算不能" and d else ("計算不能" if v is None else format_val(v,"{:.3f}"))
+                calc_w_gross = calc_w / p_fac if calc_w != "計算不能" else "計算不能" # 量り取るべき実際の重さ
+                d_rs.at[idx,"重量(mg)"] = format_val(calc_w_gross, "{:.1f}")
+                b_w_g = calc_w_gross/1000.0 if calc_w_gross != "計算不能" else None
+                d_rs.at[idx,"体積(mL)"] = format_val(calc_w_gross/(d*1000), "{:.3f}") if calc_w_gross!="計算不能" and d else ("計算不能" if v is None else format_val(v,"{:.3f}"))
+        
         elif b_liq_mask.any():
             idx = d_rl[b_liq_mask].index[0]
             c, v, m_in = to_float(d_rl.loc[idx,"設定濃度(M)"]), to_float(d_rl.loc[idx,"体積(mL)"]), to_float(d_rl.loc[idx,"モル数(mmol)"])
@@ -282,22 +285,28 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
                 d_rl.at[idx,"当量(Eq)"], d_rl.at[idx,"モル数(mmol)"] = "1.00", format_val(b_mmol, "{:.3f}")
                 if c: d_rl.at[idx,"体積(mL)"] = format_val(b_mmol/c, "{:.3f}")
 
+        # 添加試薬等の計算
         if b_mmol:
             for i, r in d_rs.iterrows():
                 if b_solid_mask.any() and i == d_rs[b_solid_mask].index[0]: continue
                 mw, d, eq, w, v, m_in = to_float(r["分子量"]), to_float(r["密度(g/mL)"]), to_float(r["当量(Eq)"]), to_float(r["重量(mg)"]), to_float(r["体積(mL)"]), to_float(r["モル数(mmol)"])
-                c_m = m_in if m_in else (b_mmol*eq if eq else (w/mw if w and mw else (v*d*1000/mw if v and d and mw else None)))
-                if c_m:
+                p_raw = to_float(r.get("純度(%)"))
+                p_fac = p_raw / 100.0 if p_raw and p_raw > 0 else 1.0
+                
+                c_m = m_in if m_in is not None else (b_mmol*eq if eq is not None else (w*p_fac/mw if w and mw else (v*d*1000*p_fac/mw if v and d and mw else None)))
+                if c_m is not None:
+                    calc_w = c_m*mw if mw else "計算不能"
+                    calc_w_gross = calc_w / p_fac if calc_w != "計算不能" else "計算不能"
                     d_rs.at[i,"当量(Eq)"] = format_val(c_m/b_mmol, "{:.2f}")
-                    d_rs.at[i,"重量(mg)"] = format_val(c_m*mw, "{:.1f}") if mw else "計算不能"
-                    d_rs.at[i,"体積(mL)"] = format_val(c_m*mw/(d*1000), "{:.3f}") if mw and d else "計算不能"
+                    d_rs.at[i,"重量(mg)"] = format_val(calc_w_gross, "{:.1f}")
+                    d_rs.at[i,"体積(mL)"] = format_val(calc_w_gross/(d*1000), "{:.3f}") if calc_w_gross != "計算不能" and d else "計算不能"
                     d_rs.at[i,"モル数(mmol)"] = format_val(c_m, "{:.3f}")
             
             for i, r in d_rl.iterrows():
                 if b_liq_mask.any() and i == d_rl[b_liq_mask].index[0]: continue
                 c, eq, v, m_in = to_float(r["設定濃度(M)"]), to_float(r["当量(Eq)"]), to_float(r["体積(mL)"]), to_float(r["モル数(mmol)"])
-                c_m = m_in if m_in else (b_mmol*eq if eq else (c*v if c and v else None))
-                if c_m:
+                c_m = m_in if m_in is not None else (b_mmol*eq if eq is not None else (c*v if c and v else None))
+                if c_m is not None:
                     d_rl.at[i,"当量(Eq)"] = format_val(c_m/b_mmol, "{:.2f}")
                     d_rl.at[i,"モル数(mmol)"] = format_val(c_m, "{:.3f}")
                     if c: d_rl.at[i,"体積(mL)"] = format_val(c_m/c, "{:.3f}")
@@ -328,11 +337,46 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
 st.header("📝 3. 実験ノート用出力")
 try:
     if not st.session_state.df_rsolid.empty or not st.session_state.df_rliquid.empty:
-        note = "【組成表】\n\n--- 試薬 (固体・純液体) ---\n" + df_to_markdown_safe(st.session_state.df_rsolid, ["主原料", "試薬名", "分子量", "当量(Eq)", "重量(mg)", "体積(mL)", "モル数(mmol)"])
+        # 主原料の文章作成
+        b_rs_mask = st.session_state.df_rsolid["主原料"].fillna(False).astype(bool)
+        b_rl_mask = st.session_state.df_rliquid["主原料"].fillna(False).astype(bool)
+        note = "【実験操作】\n反応容器に "
+        
+        if b_rs_mask.any():
+            br = st.session_state.df_rsolid[b_rs_mask].iloc[0]
+            p_raw = to_float(br.get('純度(%)'))
+            p_str = f" ({p_raw}%)" if p_raw and p_raw < 100 else ""
+            note += f"{br.get('試薬名', '')}{p_str} ({br.get('重量(mg)', '')} mg, {br.get('モル数(mmol)', '')} mmol) を仕込み、"
+        elif b_rl_mask.any():
+            br = st.session_state.df_rliquid[b_rl_mask].iloc[0]
+            note += f"{br.get('試薬名', '')} ({br.get('設定濃度(M)', '')} M, {br.get('体積(mL)', '')} mL, {br.get('モル数(mmol)', '')} mmol) を仕込み、"
+        
+        for _, r in st.session_state.df_solvents.iterrows():
+            v = to_float(r.get('体積(mL)'))
+            if v and v > 0: note += f"{r.get('試薬名', '')} ({r.get('体積(mL)', '')} mL, {r.get('設定濃度(M)', '')} M) を加えて溶解させた。"
+            
+        for _, r in st.session_state.df_rsolid[~b_rs_mask].iterrows():
+            w = to_float(r.get('重量(mg)'))
+            if w and w > 0:
+                p_raw = to_float(r.get('純度(%)'))
+                p_str = f" ({p_raw}%)" if p_raw and p_raw < 100 else ""
+                v_str = f" [{r.get('体積(mL)', '')} mL]" if r.get('体積(mL)') not in [None, "", "計算不能"] else ""
+                note += f"そこへ {r.get('試薬名', '')}{p_str} ({r.get('重量(mg)', '')} mg{v_str}, {r.get('モル数(mmol)', '')} mmol, {r.get('当量(Eq)', '')} Eq) を加えた。"
+        
+        for _, r in st.session_state.df_rliquid[~b_rl_mask].iterrows():
+            v = to_float(r.get('体積(mL)'))
+            if v and v > 0:
+                note += f"そこへ {r.get('試薬名', '')} ({r.get('設定濃度(M)', '')} M, {r.get('体積(mL)', '')} mL, {r.get('モル数(mmol)', '')} mmol, {r.get('当量(Eq)', '')} Eq) を滴下した。"
+                
+        for _, r in st.session_state.df_products.iterrows():
+            act = to_float(r.get('実収量(mg)'))
+            if act and act > 0: note += f"\n反応終了後、精製を施すことで {r.get('試薬名', '')} を得た（{r.get('実収量(mg)', '')} mg, 収率: {r.get('収率(%)', '')} %）。"
+            
+        note += "\n\n【組成表】\n\n--- 試薬 (固体・純液体) ---\n" + df_to_markdown_safe(st.session_state.df_rsolid, ["主原料", "試薬名", "純度(%)", "分子量", "当量(Eq)", "重量(mg)", "体積(mL)", "モル数(mmol)"])
         note += "\n--- 試薬 (溶液) ---\n" + df_to_markdown_safe(st.session_state.df_rliquid, ["主原料", "試薬名", "設定濃度(M)", "当量(Eq)", "体積(mL)", "モル数(mmol)"])
         note += "\n--- 反応溶媒 ---\n" + df_to_markdown_safe(st.session_state.df_solvents, ["試薬名", "設定濃度(M)", "溶媒倍率(v/w)", "体積(mL)"])
         note += "\n--- 生成物 ---\n" + df_to_markdown_safe(st.session_state.df_products, ["試薬名", "分子量", "当量(Eq)", "理論収量(mg)", "実収量(mg)", "収率(%)"])
-        st.text_area("ELN貼り付け用テキスト", value=note, height=300)
+        st.text_area("以下のテキストをコピーして電子実験ノート(ELN)等に貼り付けてください：", value=note, height=400)
 except Exception as e: st.error(f"出力エラー: {str(e)}")
 
 st.markdown("---")
