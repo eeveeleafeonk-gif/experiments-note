@@ -141,22 +141,20 @@ if "active_search" in st.session_state:
             st.session_state.df_rliquid = pd.concat([st.session_state.df_rliquid, pd.DataFrame([r])], ignore_index=True)
             st.rerun()
 
-with c_db:
+    with c_db:
         st.subheader("📕 独自DB (マイ辞書)")
         if "db_result" in st.session_state:
             db_res = st.session_state.db_result
             st.markdown(f"**{db_res['試薬名']}** (CAS: {db_res.get('CAS番号','')}) | ｺﾒﾝﾄ: {db_res['コメント']}")
-            # 融点と沸点の表示を追加！
             st.caption(f"分子量: {db_res['分子量']} | 密度: {db_res['密度(g/mL)']} | 融点: {db_res.get('融点(℃)', '不明')} | 沸点: {db_res.get('沸点(℃)', '不明')}")
             add_btn_ui(db_res, "db")
         else: st.info("マイ辞書に該当なし")
 
-with c_api:
+    with c_api:
         st.subheader("🌐 PubChem API")
         if "api_result" in st.session_state:
             api_res = st.session_state.api_result
             st.markdown(f"**{api_res['試薬名']}** (CAS: {api_res.get('CAS番号','')})")
-            # 融点と沸点の表示を追加！
             st.caption(f"分子量: {api_res['分子量']} | 密度: {api_res['密度(g/mL)']} | 融点: {api_res.get('融点(℃)', '不明')} | 沸点: {api_res.get('沸点(℃)', '不明')}")
             add_btn_ui(api_res, "api")
         else: st.info("PubChemに該当なし")
