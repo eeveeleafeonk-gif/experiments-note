@@ -132,11 +132,11 @@ if "active_search" in st.session_state:
     c_db, c_api = st.columns(2)
     def add_btn_ui(res_dict, key_prefix):
         c1, c2 = st.columns(2)
-        if c1.button("➕ 標準試薬 (固体/液体) に追加", key=f"{key_prefix}_solid", use_container_width=True):
+        if c1.button("➕ 固体・純液体 に追加", key=f"{key_prefix}_solid", use_container_width=True):
             r = {"分類": "試薬(固体/液体)", "主原料": False, "試薬名": res_dict["試薬名"], "分子量": res_dict["分子量"], "密度(g/mL)": res_dict["密度(g/mL)"], "融点(℃)": res_dict["融点(℃)"], "沸点(℃)": res_dict["沸点(℃)"]}
             st.session_state.df_rsolid = pd.concat([st.session_state.df_rsolid, pd.DataFrame([r])], ignore_index=True)
             st.rerun()
-        if c2.button("➕ 溶液試薬 (n-BuLi等) に追加", key=f"{key_prefix}_liq", use_container_width=True):
+        if c2.button("➕ 溶液試薬 に追加", key=f"{key_prefix}_liq", use_container_width=True):
             r = {"分類": "試薬(溶液)", "主原料": False, "試薬名": res_dict["試薬名"]}
             st.session_state.df_rliquid = pd.concat([st.session_state.df_rliquid, pd.DataFrame([r])], ignore_index=True)
             st.rerun()
@@ -165,20 +165,20 @@ st.markdown("---")
 st.header("📊 2. モル計算シート")
 cat_options = ["試薬(固体/液体)", "試薬(溶液)", "反応溶媒", "生成物"]
 
-st.subheader("🧪 試薬セクション")
-t_solid, t_liquid = st.tabs(["🪨 固体・純液体 試薬", "💧 溶液 試薬 (濃度から算出)"])
+st.subheader("🪨 試薬 (固体・純液体)")
+ed_rsolid = st.data_editor(st.session_state.df_rsolid, column_config={
+    "分類": st.column_config.SelectboxColumn("移籍", options=cat_options, required=True), 
+    "主原料": st.column_config.CheckboxColumn("主原料"),
+    "分子量": st.column_config.NumberColumn("分子量", format="%.2f"), 
+    "密度(g/mL)": st.column_config.NumberColumn("密度(g/mL)", format="%.2f")
+}, num_rows="dynamic", use_container_width=True, key="ed_rsolid")
 
-with t_solid:
-    ed_rsolid = st.data_editor(st.session_state.df_rsolid, column_config={
-        "分類": st.column_config.SelectboxColumn("移籍", options=cat_options, required=True), "主原料": st.column_config.CheckboxColumn("主原料"),
-        "分子量": st.column_config.NumberColumn("分子量", format="%.2f"), "密度(g/mL)": st.column_config.NumberColumn("密度(g/mL)", format="%.2f")
-    }, num_rows="dynamic", use_container_width=True, key="ed_rsolid")
-
-with t_liquid:
-    ed_rliquid = st.data_editor(st.session_state.df_rliquid, column_config={
-        "分類": st.column_config.SelectboxColumn("移籍", options=cat_options, required=True), "主原料": st.column_config.CheckboxColumn("主原料"),
-        "設定濃度(M)": st.column_config.TextColumn("設定濃度(M)")
-    }, num_rows="dynamic", use_container_width=True, key="ed_rliquid")
+st.subheader("🧪 試薬 (溶液)")
+ed_rliquid = st.data_editor(st.session_state.df_rliquid, column_config={
+    "分類": st.column_config.SelectboxColumn("移籍", options=cat_options, required=True), 
+    "主原料": st.column_config.CheckboxColumn("主原料"),
+    "設定濃度(M)": st.column_config.TextColumn("設定濃度(M)")
+}, num_rows="dynamic", use_container_width=True, key="ed_rliquid")
 
 st.subheader("💧 反応溶媒 (Solvents)")
 ed_solv = st.data_editor(st.session_state.df_solvents, column_config={
@@ -188,7 +188,8 @@ ed_solv = st.data_editor(st.session_state.df_solvents, column_config={
 st.subheader("✨ 生成物 (Products)")
 ed_prod = st.data_editor(st.session_state.df_products, column_config={
     "分類": st.column_config.SelectboxColumn("移籍", options=cat_options, required=True),
-    "理論収量(mg)": st.column_config.TextColumn("理論収量(mg)", disabled=True), "収率(%)": st.column_config.TextColumn("収率(%)", disabled=True)
+    "理論収量(mg)": st.column_config.TextColumn("理論収量(mg)", disabled=True), 
+    "収率(%)": st.column_config.TextColumn("収率(%)", disabled=True)
 }, num_rows="dynamic", use_container_width=True, key="ed_prod")
 
 # --- 移籍処理 ---
@@ -210,16 +211,36 @@ for src_df, cat_name in frames:
 if migrated: st.rerun()
 
 st.markdown("---")
-c_calc, c_clr, _ = st.columns([1.5, 1, 4])
-if c_clr.button("🔄 シートをすべてクリア", use_container_width=True):
+# ボタンを3つ並べるためにレイアウトを調整
+c_calc, c_clear_val, c_clr, _ = st.columns([1.5, 1.5, 1.2, 2.8])
+
+# 1. すべてクリアボタン（既存）
+if c_clr.button("🔄 すべてクリア", use_container_width=True):
     st.session_state.df_rsolid = st.session_state.df_rsolid.iloc[0:0]
     st.session_state.df_rliquid = st.session_state.df_rliquid.iloc[0:0]
     st.session_state.df_solvents = st.session_state.df_solvents.iloc[0:0]
     st.session_state.df_products = st.session_state.df_products.iloc[0:0]
     st.rerun()
 
+# 2. 新規：計算値のみクリアボタン（スケール変更用）
+if c_clear_val.button("🧹 計算値のみクリア", use_container_width=True):
+    # 固体・純液体
+    for col in ["当量(Eq)", "重量(mg)", "体積(mL)", "モル数(mmol)"]:
+        if col in st.session_state.df_rsolid.columns: st.session_state.df_rsolid[col] = None
+    # 溶液
+    for col in ["当量(Eq)", "体積(mL)", "モル数(mmol)"]:
+        if col in st.session_state.df_rliquid.columns: st.session_state.df_rliquid[col] = None
+    # 溶媒
+    for col in ["設定濃度(M)", "溶媒倍率(v/w)", "体積(mL)"]:
+        if col in st.session_state.df_solvents.columns: st.session_state.df_solvents[col] = None
+    # 生成物
+    for col in ["当量(Eq)", "理論収量(mg)", "実収量(mg)", "収率(%)"]:
+        if col in st.session_state.df_products.columns: st.session_state.df_products[col] = None
+    st.rerun()
+
 # --- 計算ロジック ---
-if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary", use_container_width=True):
+# 3. 計算実行ボタン
+if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary", use_container_width=True)
     d_rs, d_rl, d_sv, d_pr = ed_rsolid.copy(), ed_rliquid.copy(), ed_solv.copy(), ed_prod.copy()
     b_solid_mask = d_rs["主原料"].fillna(False).astype(bool)
     b_liq_mask = d_rl["主原料"].fillna(False).astype(bool)
