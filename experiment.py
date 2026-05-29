@@ -29,15 +29,10 @@ def format_val(val, fmt):
 
 def extract_temp(text):
     text = str(text)
-    # 摂氏 (°C / C) の表記を優先して探す
     match_c = re.search(r'([-+]?\d*\.?\d+)\s*(?:°|deg)?\s*C', text, re.IGNORECASE)
-    if match_c: 
-        return float(match_c.group(1))
-    # 華氏 (°F / F) しかない場合は摂氏に変換する
+    if match_c: return float(match_c.group(1))
     match_f = re.search(r'([-+]?\d*\.?\d+)\s*(?:°|deg)?\s*F', text, re.IGNORECASE)
-    if match_f: 
-        return round((float(match_f.group(1)) - 32) * 5.0 / 9.0, 1)
-    # 数字だけのフォールバック
+    if match_f: return round((float(match_f.group(1)) - 32) * 5.0 / 9.0, 1)
     match = re.search(r'[-+]?\d*\.\d+|\d+', text)
     return float(match.group()) if match else None
 
@@ -46,7 +41,6 @@ def extract_density(text):
     return float(match.group()) if match else None
 
 def df_to_markdown_safe(df, cols):
-    # tabulateライブラリなしでも確実にMarkdown表を出力するための関数
     sub_df = df[cols].copy()
     if sub_df.empty: return ""
     sub_df = sub_df.fillna("")
@@ -75,7 +69,6 @@ with st.sidebar:
     st.header("💾 レシピの保存と読込")
     st.write("現在の表の状態をファイルに保存したり、過去のデータを復元したりできます。")
     
-    # 【保存】現在のDataFrameの状態をJSONに変換
     data_to_save = {
         "reagents": st.session_state.df_reagents.to_dict(orient="records"),
         "solvents": st.session_state.df_solvents.to_dict(orient="records"),
@@ -92,7 +85,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 【読込】JSONファイルからDataFrameを復元
     uploaded_file = st.file_uploader("📂 保存したレシピを読み込む", type=["json"])
     if uploaded_file is not None:
         if st.button("📥 読み込みを実行 (現在の表は上書きされます)", use_container_width=True, type="primary"):
@@ -108,7 +100,7 @@ with st.sidebar:
 
 # --- 2. PubChem API 検索窓 ---
 st.header("🔍 1. 化合物物性検索 (PubChem API)")
-st.write("英語の化合物名（例: ethanol, toluene, acetic acid）を入力して物性と構造式を取得できます。")
+st.write("英語の化合物名（例: ethanol, toluene, acetic acid）を入力して物性を取得できます。")
 
 col_search, col_btn = st.columns([4, 1])
 with col_search:
@@ -118,20 +110,16 @@ with col_btn:
 
 if search_clicked and search_name:
     with st.spinner("PubChemからデータと構造式を取り出しています..."):
-        # 1. まずは fastidentity（略称や同義語に強い検索）で CID を探す
         cid_search_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/fastidentity/name/{search_name}/cids/JSON"
         res_cid = requests.get(cid_search_url)
         
-        # 2. 見つからなければ通常の name 検索を試す
         if res_cid.status_code != 200:
              cid_search_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{search_name}/cids/JSON"
              res_cid = requests.get(cid_search_url)
 
         if res_cid.status_code == 200:
-            # 見つかったCID（化合物ID）を取得
             cid = res_cid.json()["IdentifierList"]["CID"][0]
             
-            # CIDを使って分子量や名前を取得
             url_prop = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/MolecularWeight,CanonicalSMILES,Title/JSON"
             res_prop = requests.get(url_prop)
             
@@ -140,11 +128,10 @@ if search_clicked and search_name:
             if res_prop.status_code == 200:
                 prop_data = res_prop.json()["PropertyTable"]["Properties"][0]
                 mw = prop_data.get("MolecularWeight", None)
-                title = prop_data.get("Title", search_name) # 正式名称を取得
+                title = prop_data.get("Title", search_name)
             
             props = {"density": None, "mp": None, "bp": None, "cid": cid}
             
-            # CIDを使って融点・沸点・密度を取得
             url_view = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON"
             res_view = requests.get(url_view)
             if res_view.status_code == 200:
@@ -177,38 +164,6 @@ if search_clicked and search_name:
             st.error("PubChemに該当する化合物が見つかりませんでした。英語名や略称を確認してください。")
             if "search_result" in st.session_state: del st.session_state.search_result
             if "search_cid" in st.session_state: del st.session_state.search_cid
-                url_view = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON"
-                res_view = requests.get(url_view)
-                if res_view.status_code == 200:
-                    view_data = res_view.json()
-                    
-                    def parse_section(sections):
-                        for sec in sections:
-                            heading = sec.get("TOCHeading", "")
-                            if heading == "Melting Point":
-                                try: props["mp"] = extract_temp(sec["Information"][0]["Value"]["StringWithMarkup"][0]["String"])
-                                except: pass
-                            elif heading == "Boiling Point":
-                                try: props["bp"] = extract_temp(sec["Information"][0]["Value"]["StringWithMarkup"][0]["String"])
-                                except: pass
-                            elif heading == "Density":
-                                try: props["density"] = extract_density(sec["Information"][0]["Value"]["StringWithMarkup"][0]["String"])
-                                except: pass
-                            if "Section" in sec: parse_section(sec["Section"])
-                    
-                    if "Record" in view_data and "Section" in view_data["Record"]:
-                        parse_section(view_data["Record"]["Section"])
-            
-            st.session_state.search_result = {
-                "分類": "試薬", "主原料": False, "試薬名": title,
-                "分子量": float(mw) if mw else None, "密度(g/mL)": props["density"], "融点(℃)": props["mp"], "沸点(℃)": props["bp"],
-                "当量(Eq)": None, "重量(mg)": None, "体積(mL)": None, "モル数(mmol)": None
-            }
-            st.session_state.search_cid = props["cid"]
-        else:
-            st.error("PubChemに該当する化合物が見つかりませんでした。英語名を確認してください。")
-            if "search_result" in st.session_state: del st.session_state.search_result
-            if "search_cid" in st.session_state: del st.session_state.search_cid
 
 if "search_result" in st.session_state:
     res = st.session_state.search_result
@@ -217,6 +172,7 @@ if "search_result" in st.session_state:
     st.success(f"🎉 化合物が見つかりました: **{res['試薬名']}**")
     
     col_img, col_info = st.columns([1, 4])
+    
     with col_img:
         if cid:
             img_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/PNG?record_type=2d&image_size=large"
@@ -246,7 +202,6 @@ st.header("📊 2. モル計算シート")
 
 cat_options = ["試薬", "溶媒", "生成物"]
 
-# 【段1】試薬テーブル
 st.subheader("🧪 試薬 (Reagents)")
 edited_reagents = st.data_editor(
     st.session_state.df_reagents,
@@ -266,7 +221,6 @@ edited_reagents = st.data_editor(
     num_rows="dynamic", key="editor_reagents", use_container_width=True
 )
 
-# 【段2】溶媒テーブル
 st.subheader("💧 溶媒 (Solvents)")
 edited_solvents = st.data_editor(
     st.session_state.df_solvents,
@@ -284,7 +238,6 @@ edited_solvents = st.data_editor(
     num_rows="dynamic", key="editor_solvents", use_container_width=True
 )
 
-# 【段3】生成物テーブル
 st.subheader("✨ 生成物 (Products)")
 edited_products = st.data_editor(
     st.session_state.df_products,
@@ -302,10 +255,8 @@ edited_products = st.data_editor(
     num_rows="dynamic", key="editor_products", use_container_width=True
 )
 
-# --- 瞬時移籍（リアルタイム移動）の自動検知ロジック ---
 migrated = False
 
-# 試薬から他へ
 mask_r = edited_reagents["分類"] != "試薬"
 if mask_r.any():
     for _, row in edited_reagents[mask_r].iterrows():
@@ -314,7 +265,6 @@ if mask_r.any():
     st.session_state.df_reagents = edited_reagents[~mask_r].reset_index(drop=True)
     migrated = True
 
-# 溶媒から他へ
 mask_s = edited_solvents["分類"] != "溶媒"
 if mask_s.any():
     for _, row in edited_solvents[mask_s].iterrows():
@@ -323,7 +273,6 @@ if mask_s.any():
     st.session_state.df_solvents = edited_solvents[~mask_s].reset_index(drop=True)
     migrated = True
 
-# 生成物から他へ
 mask_p = edited_products["分類"] != "生成物"
 if mask_p.any():
     for _, row in edited_products[mask_p].iterrows():
@@ -351,7 +300,6 @@ if calc_triggered:
     df_calc_s = edited_solvents.copy()
     df_calc_p = edited_products.copy()
 
-    # --- 試薬・主原料の計算 ---
     base_mask = df_calc_r["主原料"].fillna(False).astype(bool)
     base_mmol = None
     base_w_g = None
@@ -386,7 +334,6 @@ if calc_triggered:
             else:
                 df_calc_r.at[base_idx, "体積(mL)"] = "計算不能" if base_v is None else format_val(base_v, "{:.3f}")
 
-            # 他の試薬の逆算・正算
             for idx, row in df_calc_r.iterrows():
                 if idx == base_idx: continue
                 mw = to_float(row["分子量"])
@@ -413,7 +360,6 @@ if calc_triggered:
                     df_calc_r.at[idx, "体積(mL)"] = format_val(calc_v, "{:.3f}")
                     df_calc_r.at[idx, "モル数(mmol)"] = format_val(calc_mmol, "{:.3f}")
 
-    # --- 溶媒の倍率・濃度計算 ---
     if base_mmol is not None:
         for idx, row in df_calc_s.iterrows():
             conc = to_float(row.get("設定濃度(M)"))
@@ -436,7 +382,6 @@ if calc_triggered:
                 df_calc_s.at[idx, "溶媒倍率(v/w)"] = format_val(v / base_w_g if base_w_g else "計算不能", "{:.2f}")
                 df_calc_s.at[idx, "体積(mL)"] = format_val(v, "{:.3f}")
 
-    # --- 生成物の理論収量・収率計算 ---
     if base_mmol is not None:
         for idx, row in df_calc_p.iterrows():
             mw = to_float(row.get("分子量"))
