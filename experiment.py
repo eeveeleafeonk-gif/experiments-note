@@ -67,11 +67,12 @@ if 'df_products' not in st.session_state:
 
 # --- 2. Googleスプレッドシート（マイ辞書）の読み込み ---
 try:
-    conn = st.connection("gsheets", type=GSheetsConnection)
+    # 修正点: サービスアカウントの認証情報を使うように指定
+    conn = st.connection("gsheets", type=GSheetsConnection, use_service_account=True)
     df_mydict = conn.read(ttl="0m")
     df_mydict = df_mydict.dropna(subset=["試薬名"])
 except Exception as e:
-    st.warning("⚠️ Googleスプレッドシートへの接続が設定されていないか、エラーが発生しました。マイ辞書機能はスキップされます。")
+    st.warning(f"⚠️ Googleスプレッドシート接続エラー: {e}")
     df_mydict = pd.DataFrame(columns=["試薬名", "略称や通称", "分子量", "密度", "沸点", "融点", "CAS番号", "コメント"])
 
 # --- 💾 サイドバー：レシピの保存と読込 ---
