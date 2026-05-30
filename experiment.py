@@ -47,14 +47,12 @@ def extract_density(text):
     return float(match.group()) if match else None
 
 # エクセルファイル生成用関数
-# エクセルファイル生成用関数
 def to_excel(df_list, sheet_names):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         for df, name in zip(df_list, sheet_names):
             df.to_excel(writer, index=False, sheet_name=name)
             
-            # 💡 ここを writer.book に修正しました！
             workbook = writer.book
             worksheet = writer.sheets[name]
             
@@ -71,9 +69,12 @@ def to_excel(df_list, sheet_names):
             num_rows, num_cols = df.shape
             for r in range(num_rows + 1):
                 for c in range(num_cols):
-                    if r == 0: worksheet.write(r, c, df.columns[c], header_format)
-                    else: worksheet.write(r, c, df.iloc[r-1, c], data_format)
-    return output.getvalue()            
+                    if r == 0:
+                        worksheet.write(r, c, df.columns[c], header_format)
+                    else:
+                        worksheet.write(r, c, df.iloc[r-1, c], data_format)
+    return output.getvalue()
+           
             header_format = workbook.add_format({
                 'bold': True, 'text_wrap': True, 'valign': 'top',
                 'fg_color': '#D9EAD3', 'border': 1
