@@ -5,6 +5,7 @@ import re
 import numpy as np
 import json
 import gspread
+import io
 
 st.set_page_config(layout="wide")
 st.title("🧪 研究室用 統合型モル計算＆化合物検索プラットフォーム")
@@ -22,15 +23,54 @@ def format_val(val, fmt):
     try: return fmt.format(val)
     except: return str(val)
 
+# 華氏(F)→摂氏(C)の自動変換を追加した温度抽出
 def extract_temp(text):
-    match_c = re.search(r'([-+]?\d*\.?\d+)\s*(?:°|deg)?\s*C', str(text), re.IGNORECASE)
-    if match_c: return float(match_c.group(1))
-    match = re.search(r'[-+]?\d*\.\d+|\d+', str(text))
+    text = str(text)
+    # 華氏のパターンを検知
+    match_f = re.search(r'([-+]?\d*\.?\d+)\s*(?:°|deg)?\s*F', text, re.IGNORECASE)
+    if match_f:
+        temp_f = float(match_f.group(1))
+        temp_c = (temp_f - 32) * 5.0 / 9.0
+        return round(temp_c, 1)
+    
+    # 摂氏のパターンを検知
+    match_c = re.search(r'([-+]?\d*\.?\d+)\s*(?:°|deg)?\s*C', text, re.IGNORECASE)
+    if match_c:
+        return float(match_c.group(1))
+
+    # 記号なし
+    match = re.search(r'[-+]?\d*\.\d+|\d+', text)
     return float(match.group()) if match else None
 
 def extract_density(text):
     match = re.search(r'[-+]?\d*\.\d+|\d+', str(text))
     return float(match.group()) if match else None
+
+# エクセルファイル生成用関数
+def to_excel(df_list, sheet_names):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        for df, name in zip(df_list, sheet_names):
+            df.to_excel(writer, index=False, sheet_name=name)
+            workbook = writer.workbook
+            worksheet = writer.sheets[name]
+            
+            header_format = workbook.add_format({
+                'bold': True, 'text_wrap': True, 'valign': 'top',
+                'fg_color': '#D9EAD3', 'border': 1
+            })
+            data_format = workbook.add_format({'border': 1})
+
+            for i, col in enumerate(df.columns):
+                max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+                worksheet.set_column(i, i, max_len)
+            
+            num_rows, num_cols = df.shape
+            for r in range(num_rows + 1):
+                for c in range(num_cols):
+                    if r == 0: worksheet.write(r, c, df.columns[c], header_format)
+                    else: worksheet.write(r, c, df.iloc[r-1, c], data_format)
+    return output.getvalue()
 
 def df_to_markdown_safe(df, cols):
     sub_df = df[cols].copy()
@@ -48,21 +88,19 @@ def get_current_df(df_key, editor_key):
     if editor_key in st.session_state:
         ed = st.session_state[editor_key]
         for idx, changes in ed.get("edited_rows", {}).items():
-            for col, val in changes.items():
-                df.at[int(idx), col] = val
+            for col, val in changes.items(): df.at[int(idx), col] = val
         added = ed.get("added_rows", [])
-        if added:
-            df = pd.concat([df, pd.DataFrame(added)], ignore_index=True)
+        if added: df = pd.concat([df, pd.DataFrame(added)], ignore_index=True)
         deleted = ed.get("deleted_rows", [])
-        if deleted:
-            df = df.drop(deleted).reset_index(drop=True)
+        if deleted: df = df.drop(deleted).reset_index(drop=True)
     return df
 
-# --- GSheets接続ヘルパー ---
+# GSheets接続ヘルパー
 def get_gsheets_client():
     creds_dict = dict(st.secrets["connections"]["gsheets"])
     if "private_key" in creds_dict:
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        pk = creds_dict["private_key"].replace("\\n", "\n").strip()
+        creds_dict["private_key"] = pk
     url = creds_dict.pop("spreadsheet", None)
     client = gspread.service_account_from_dict(creds_dict)
     return client, url
@@ -116,14 +154,12 @@ if col_b.button("🔍 同時検索を実行", use_container_width=True) and sear
 
 if "active_search" in st.session_state:
     q = st.session_state.active_search
-    # DB Search
     q_low = q.lower()
     db_match = df_mydict[df_mydict["試薬名"].astype(str).str.lower().str.contains(q_low, na=False) | df_mydict["略称や通称"].astype(str).str.lower().str.contains(q_low, na=False)]
     if not db_match.empty:
         row = db_match.iloc[0]
         st.session_state.db_result = {"試薬名": row["試薬名"], "分子量": to_float(row.get("分子量")), "密度(g/mL)": to_float(row.get("密度")), "融点(℃)": to_float(row.get("融点")), "沸点(℃)": to_float(row.get("沸点")), "CAS番号": row.get("CAS番号", ""), "コメント": row.get("コメント", "")}
     
-    # API Search
     if "api_result" not in st.session_state:
         with st.spinner("PubChemから取得中..."):
             res_cid = requests.get(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/fastidentity/name/{q}/cids/JSON")
@@ -230,7 +266,7 @@ for src_df, cat_name in frames:
 if migrated: st.rerun()
 
 st.markdown("---")
-c_calc, c_clear_val, c_clr, _ = st.columns([1.5, 1.5, 1.2, 2.8])
+c_calc, c_clear_val, c_clr, c_excel = st.columns([1.5, 1.5, 1.2, 2.0])
 
 if c_clr.button("🔄 すべてクリア", use_container_width=True):
     st.session_state.df_rsolid = st.session_state.df_rsolid.iloc[0:0]
@@ -265,14 +301,14 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
             idx = d_rs[b_solid_mask].index[0]
             mw, d, w, v, m_in = to_float(d_rs.loc[idx,"分子量"]), to_float(d_rs.loc[idx,"密度(g/mL)"]), to_float(d_rs.loc[idx,"重量(mg)"]), to_float(d_rs.loc[idx,"体積(mL)"]), to_float(d_rs.loc[idx,"モル数(mmol)"])
             p_raw = to_float(d_rs.loc[idx,"純度(%)"])
-            p_fac = p_raw / 100.0 if p_raw and p_raw > 0 else 1.0 # 純度補正
+            p_fac = p_raw / 100.0 if p_raw and p_raw > 0 else 1.0
             
             b_mmol = m_in if m_in else (w*p_fac/mw if w and mw else (v*d*1000*p_fac/mw if v and d and mw else None))
             
             if b_mmol:
                 d_rs.at[idx,"当量(Eq)"], d_rs.at[idx,"モル数(mmol)"] = "1.00", format_val(b_mmol, "{:.3f}")
                 calc_w = b_mmol*mw if mw else "計算不能"
-                calc_w_gross = calc_w / p_fac if calc_w != "計算不能" else "計算不能" # 量り取るべき実際の重さ
+                calc_w_gross = calc_w / p_fac if calc_w != "計算不能" else "計算不能"
                 d_rs.at[idx,"重量(mg)"] = format_val(calc_w_gross, "{:.1f}")
                 b_w_g = calc_w_gross/1000.0 if calc_w_gross != "計算不能" else None
                 d_rs.at[idx,"体積(mL)"] = format_val(calc_w_gross/(d*1000), "{:.3f}") if calc_w_gross!="計算不能" and d else ("計算不能" if v is None else format_val(v,"{:.3f}"))
@@ -333,11 +369,27 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
     st.session_state.df_rsolid, st.session_state.df_rliquid, st.session_state.df_solvents, st.session_state.df_products = d_rs, d_rl, d_sv, d_pr
     st.rerun()
 
+# エクセル出力ボタン
+df_download_list = [
+    st.session_state.df_rsolid,
+    st.session_state.df_rliquid,
+    st.session_state.df_solvents,
+    st.session_state.df_products
+]
+sheet_names_list = ['Solid_Reagents', 'Liquid_Reagents', 'Solvents', 'Products']
+excel_data = to_excel(df_download_list, sheet_names_list)
+c_excel.download_button(
+    label="📄 エクセルで表をダウンロード",
+    data=excel_data,
+    file_name='reaction_summary.xlsx',
+    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    use_container_width=True
+)
+
 # --- 5. 実験ノート用出力 ---
 st.header("📝 3. 実験ノート用出力")
 try:
     if not st.session_state.df_rsolid.empty or not st.session_state.df_rliquid.empty:
-        # 主原料の文章作成
         b_rs_mask = st.session_state.df_rsolid["主原料"].fillna(False).astype(bool)
         b_rl_mask = st.session_state.df_rliquid["主原料"].fillna(False).astype(bool)
         note = "【実験操作】\n反応容器に "
