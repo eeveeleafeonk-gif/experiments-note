@@ -23,22 +23,18 @@ def format_val(val, fmt):
     try: return fmt.format(val)
     except: return str(val)
 
-# 華氏(F)→摂氏(C)の自動変換を追加した温度抽出
 def extract_temp(text):
     text = str(text)
-    # 華氏のパターンを検知
     match_f = re.search(r'([-+]?\d*\.?\d+)\s*(?:°|deg)?\s*F', text, re.IGNORECASE)
     if match_f:
         temp_f = float(match_f.group(1))
         temp_c = (temp_f - 32) * 5.0 / 9.0
         return round(temp_c, 1)
     
-    # 摂氏のパターンを検知
     match_c = re.search(r'([-+]?\d*\.?\d+)\s*(?:°|deg)?\s*C', text, re.IGNORECASE)
     if match_c:
         return float(match_c.group(1))
 
-    # 記号なし
     match = re.search(r'[-+]?\d*\.\d+|\d+', text)
     return float(match.group()) if match else None
 
@@ -46,7 +42,6 @@ def extract_density(text):
     match = re.search(r'[-+]?\d*\.\d+|\d+', str(text))
     return float(match.group()) if match else None
 
-# エクセルファイル生成用関数
 def to_excel(df_list, sheet_names):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -74,23 +69,6 @@ def to_excel(df_list, sheet_names):
                     else:
                         worksheet.write(r, c, df.iloc[r-1, c], data_format)
     return output.getvalue()
-           
-            header_format = workbook.add_format({
-                'bold': True, 'text_wrap': True, 'valign': 'top',
-                'fg_color': '#D9EAD3', 'border': 1
-            })
-            data_format = workbook.add_format({'border': 1})
-
-            for i, col in enumerate(df.columns):
-                max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
-                worksheet.set_column(i, i, max_len)
-            
-            num_rows, num_cols = df.shape
-            for r in range(num_rows + 1):
-                for c in range(num_cols):
-                    if r == 0: worksheet.write(r, c, df.columns[c], header_format)
-                    else: worksheet.write(r, c, df.iloc[r-1, c], data_format)
-    return output.getvalue()
 
 def df_to_markdown_safe(df, cols):
     sub_df = df[cols].copy()
@@ -102,7 +80,6 @@ def df_to_markdown_safe(df, cols):
         md += "| " + " | ".join([str(x) for x in row.tolist()]) + " |\n"
     return md
 
-# 最新手入力回収用関数
 def get_current_df(df_key, editor_key):
     df = st.session_state[df_key].copy()
     if editor_key in st.session_state:
@@ -115,7 +92,6 @@ def get_current_df(df_key, editor_key):
         if deleted: df = df.drop(deleted).reset_index(drop=True)
     return df
 
-# GSheets接続ヘルパー
 def get_gsheets_client():
     creds_dict = dict(st.secrets["connections"]["gsheets"])
     if "private_key" in creds_dict:
@@ -316,7 +292,6 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
     if not b_solid_mask.any() and not b_liq_mask.any() and (len(d_rs)>0 or len(d_rl)>0):
         st.error("⚠️ 『主原料』にチェックを入れてください。")
     else:
-        # 主原料の計算
         if b_solid_mask.any():
             idx = d_rs[b_solid_mask].index[0]
             mw, d, w, v, m_in = to_float(d_rs.loc[idx,"分子量"]), to_float(d_rs.loc[idx,"密度(g/mL)"]), to_float(d_rs.loc[idx,"重量(mg)"]), to_float(d_rs.loc[idx,"体積(mL)"]), to_float(d_rs.loc[idx,"モル数(mmol)"])
@@ -341,7 +316,6 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
                 d_rl.at[idx,"当量(Eq)"], d_rl.at[idx,"モル数(mmol)"] = "1.00", format_val(b_mmol, "{:.3f}")
                 if c: d_rl.at[idx,"体積(mL)"] = format_val(b_mmol/c, "{:.3f}")
 
-        # 添加試薬等の計算
         if b_mmol:
             for i, r in d_rs.iterrows():
                 if b_solid_mask.any() and i == d_rs[b_solid_mask].index[0]: continue
@@ -389,13 +363,8 @@ if c_calc.button("⚙️ 計算実行 (空きマスを埋める)", type="primary
     st.session_state.df_rsolid, st.session_state.df_rliquid, st.session_state.df_solvents, st.session_state.df_products = d_rs, d_rl, d_sv, d_pr
     st.rerun()
 
-# エクセル出力ボタン
-df_download_list = [
-    st.session_state.df_rsolid,
-    st.session_state.df_rliquid,
-    st.session_state.df_solvents,
-    st.session_state.df_products
-]
+# エクセルダウンロードボタン
+df_download_list = [st.session_state.df_rsolid, st.session_state.df_rliquid, st.session_state.df_solvents, st.session_state.df_products]
 sheet_names_list = ['Solid_Reagents', 'Liquid_Reagents', 'Solvents', 'Products']
 excel_data = to_excel(df_download_list, sheet_names_list)
 c_excel.download_button(
@@ -406,7 +375,7 @@ c_excel.download_button(
     use_container_width=True
 )
 
-# --- 5. 実験ノート用出力 ---
+# --- 5. 実験ノート用テキスト出力 ---
 st.header("📝 3. 実験ノート用出力")
 try:
     if not st.session_state.df_rsolid.empty or not st.session_state.df_rliquid.empty:
